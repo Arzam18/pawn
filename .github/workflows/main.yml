@@ -35,6 +35,8 @@ jobs:
       - name: Configure Android toolchain
         shell: bash
         run: |
+          set -euxo pipefail
+
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
           echo "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
@@ -58,26 +60,22 @@ jobs:
           test -f build/pawn
           chmod +x build/pawn
 
-      - name: Verify executable architecture
+      - name: Verify Android ARM64 binary
+        shell: bash
         run: |
           set -euxo pipefail
+
+          test -f build/pawn
+          test -x build/pawn
 
           file build/pawn
           llvm-readelf -h build/pawn
           llvm-readelf -d build/pawn || true
 
-          file build/pawn | grep -E 'ELF 64-bit.*ARM aarch64|ELF 64-bit LSB pie executable, ARM aarch64'
+          llvm-readelf -h build/pawn | grep -q 'AArch64'
 
-      - name: Verify UCI startup
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          printf 'uci\nisready\nquit\n' | timeout 30s build/pawn \
-            | tee uci-output.txt
-
-          grep -q 'uciok' uci-output.txt
-          grep -q 'readyok' uci-output.txt
+          echo "Android ARM64 binary verified."
+          echo "UCI runtime testing must be performed on Android."
 
       - name: Package Android ARM64 binary
         shell: bash
@@ -86,7 +84,11 @@ jobs:
 
           mkdir -p dist
           cp build/pawn dist/pawn-android-arm64
-          cp LICENSE dist/LICENSE
+
+          if [ -f LICENSE ]; then
+            cp LICENSE dist/LICENSE
+          fi
+
           sha256sum dist/pawn-android-arm64 > dist/SHA256SUMS.txt
 
       - name: Upload engine

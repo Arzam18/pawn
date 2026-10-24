@@ -1,49 +1,98 @@
-name: Pawn Android Build
+name: Build Pawn for Android ARM64
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [main]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build-android:
-    name: Build Pawn for Android (ARM64)
-    runs-on: ubuntu-latest
+  build-android-arm64:
+    name: Pawn Android ARM64 (NEON)
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Set up Android NDK
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make file binutils
+
+      - name: Install Android NDK
         uses: nttld/setup-ndk@v1
-        id: setup-ndk
         with:
-          ndk-version: r26b
+          ndk-version: r27d
+          link-to-sdk: true
 
-      - name: Ensure NNUE Network File Exists
+      - name: Configure Android toolchain
+        shell: bash
         run: |
-          # Automatically detects the network filename from NNUE.hpp and creates a placeholder if missing
-          NET_FILE=$(grep NNUE_Default_File src/NNUE.hpp | cut -d'"' -f2)
-          if [ ! -f "src/$NET_FILE" ]; then
-            touch "src/$NET_FILE"
-            echo "Created placeholder for src/$NET_FILE"
-          fi
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
 
-      - name: Build Pawn for Android ARM64
+      - name: Build optimized ARM64 engine
+        shell: bash
         run: |
-          TOOLCHAIN=${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin
-          make \
-            CC=$TOOLCHAIN/aarch64-linux-android29-clang \
-            CXX=$TOOLCHAIN/aarch64-linux-android29-clang++ \
-            ARCH=armv8-a
+          set -euxo pipefail
 
-      - name: Upload Build Artifact
+          export TARGET=aarch64-linux-android24
+          export CC="${TARGET}-clang"
+          export CXX="${TARGET}-clang++"
+
+          make clean || true
+
+          make -j"$(nproc)" \
+            ARCH=armv8-a+simd \
+            CC="$CC" \
+            CXX="$CXX -static-libstdc++" \
+            BUILD_DIR=build
+
+          test -f build/pawn
+          chmod +x build/pawn
+
+      - name: Verify executable architecture
+        run: |
+          set -euxo pipefail
+
+          file build/pawn
+          llvm-readelf -h build/pawn
+          llvm-readelf -d build/pawn || true
+
+          file build/pawn | grep -E 'ELF 64-bit.*ARM aarch64|ELF 64-bit LSB pie executable, ARM aarch64'
+
+      - name: Verify UCI startup
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          printf 'uci\nisready\nquit\n' | timeout 30s build/pawn \
+            | tee uci-output.txt
+
+          grep -q 'uciok' uci-output.txt
+          grep -q 'readyok' uci-output.txt
+
+      - name: Package Android ARM64 binary
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p dist
+          cp build/pawn dist/pawn-android-arm64
+          cp LICENSE dist/LICENSE
+          sha256sum dist/pawn-android-arm64 > dist/SHA256SUMS.txt
+
+      - name: Upload engine
         uses: actions/upload-artifact@v4
         with:
-          name: Pawn-Android-arm64
-          path: build/pawn
-          retention-days: 7
+          name: Pawn-Android-ARM64-NEON
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
